@@ -3,3 +3,5 @@ dist/
 out/*.zip
 .DS_Store
 *.log
+out/*.png
+public/samples/lalo-penguin-original.png
