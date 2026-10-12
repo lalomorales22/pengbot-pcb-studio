@@ -83,6 +83,9 @@ export interface Pour { layer: 'BottomCopper'; net: string; clearance: number; m
 export interface Design {
   name?: string; board: { w: number; h: number };
   art: Art[]; traces: Trace[]; vias: Via[]; pads: UserPad[]; chips: Chip[]; texts: SilkText[]; pours: Pour[];
+  /** Copper keepouts (mm), e.g. the ESP32 antenna: cleared from pours on every layer, no traces/pads allowed. */
+  penguinCount?: { top: number; bottom: number };
+  keepouts?: { x1: number; y1: number; x2: number; y2: number; label?: string }[];
 }
 export const emptyDesign = (w = 50, h = 50): Design => ({ board: { w, h }, art: [], traces: [], vias: [], pads: [], chips: [], texts: [], pours: [] });
 
@@ -123,6 +126,7 @@ export function pourPrims(d: Design, pr: Pour): Prim[] {
   const out: Prim[] = [{ t: 'rect', x1: m, y1: m, x2: w - m, y2: h - m }];
   const holes = [...allPads(d).filter(p => p.drill), ...d.vias.map(v => ({ x: v.x, y: v.y, w: v.d, h: v.d, shape: 'circle' as const, net: v.net, drill: v.drill }))];
   for (const p of holes) out.push(clear(padPrim(p, cl)));
+  for (const k of d.keepouts ?? []) out.push(clear({ t: 'rect', x1: k.x1, y1: k.y1, x2: k.x2, y2: k.y2 }));
   for (const t of d.traces.filter(t => (t.layer as string) === pr.layer)) out.push(clear({ t: 'line', pts: t.pts, w: t.width + 2 * cl }));
   for (const p of holes.filter(p => p.net === pr.net)) {
     const r = Math.max(p.w, p.h) / 2 + cl + 0.1, sw = 0.5;
@@ -150,6 +154,10 @@ export function layerPrims(d: Design, layer: LayerId): { rects: Rect[]; prims: P
       traces('TopSilk');
       for (const c of d.chips) { const s = chipSilk(c); s.lines.forEach(l => prims.push({ t: 'line', pts: l, w: 0.15 })); s.dots.forEach(([x, y, dd]) => prims.push({ t: 'circ', x, y, d: dd })); }
       pads.forEach(p => prims.push(clear(padPrim(p, RULES.maskExp + RULES.silkClear)))); // keep silk off pads
+      break;
+    case 'BottomSilk':
+      tht.forEach(p => prims.push(clear(padPrim(p, RULES.maskExp + RULES.silkClear))));
+      d.vias.forEach(v => prims.push(clear({ t: 'circ', x: v.x, y: v.y, d: v.d + 2 * RULES.silkClear })));
       break;
   }
   return { rects, prims };
@@ -242,6 +250,7 @@ ${(PFX + '.DRL').padEnd(18)} Excellon drills (${drills(d).length} plated holes)
 bom.csv / cpl.csv  BOM + placement (JLCPCB column names; fill LCSC part numbers before ordering assembly)
 
 Parts: ${d.chips.map(c => `${c.ref}=${c.value ?? c.fp}`).join(', ') || 'none'}
+Keepouts: ${(d.keepouts ?? []).map(k => `${k.label ?? 'keepout'} ${k.x1},${k.y1}-${k.x2},${k.y2} mm`).join('; ') || 'none'}
 Traces: ${d.traces.length}  Vias: ${d.vias.length}  Pads: ${d.pads.length}  Pours: ${d.pours.map(p => p.layer + ':' + p.net).join(', ') || 'none'}
 
 Rules used: min trace ${RULES.minTrace} mm (signals 0.25, power 0.4), clearance >= ${RULES.minClear} mm, via ${RULES.viaD}/${RULES.viaDrill} mm

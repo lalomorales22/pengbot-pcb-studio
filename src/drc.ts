@@ -55,6 +55,7 @@ export function runDrc(d: Design): DrcReport {
     const a = it[i];
     // board-edge clearance
     const bb = a.s.k === 'rect' ? [a.s.x1, a.s.y1, a.s.x2, a.s.y2] : [Math.min(a.s.a[0], a.s.b[0]) - a.s.r, Math.min(a.s.a[1], a.s.b[1]) - a.s.r, Math.max(a.s.a[0], a.s.b[0]) + a.s.r, Math.max(a.s.a[1], a.s.b[1]) + a.s.r];
+    for (const k of d.keepouts ?? []) if (bb[0] < k.x2 && bb[2] > k.x1 && bb[1] < k.y2 && bb[3] > k.y1) violations.push(`copper in ${k.label ?? 'keepout'}: ${a.label}`);
     if (bb[0] < RULES.edgeClear || bb[1] < RULES.edgeClear || bb[2] > d.board.w - RULES.edgeClear || bb[3] > d.board.h - RULES.edgeClear) violations.push(`edge clearance: ${a.label}`);
     for (let j = i + 1; j < it.length; j++) {
       const b = it[j];

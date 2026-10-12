@@ -42,6 +42,7 @@ export function paintSide(cv: HTMLCanvasElement, side: 'top' | 'bottom', d: Desi
       for (const pr of d.pours) { // GND pour with clearances + thermal spokes
         const c = pr.clearance; ctx.fillRect(pr.margin, pr.margin, BW - 2 * pr.margin, BH - 2 * pr.margin);
         ctx.fillStyle = maskOn ? L.mask : L.fr4; ctx.beginPath(); padPath(holes, c); ctx.fill();
+        for (const k of d.keepouts ?? []) ctx.fillRect(k.x1, k.y1, k.x2 - k.x1, k.y2 - k.y1);
         ctx.fillStyle = color; ctx.strokeStyle = color;
         for (const p of holes.filter(p => p.net === pr.net)) { const r = Math.max(p.w, p.h) / 2 + c + 0.1; polyline([[p.x - r, p.y], [p.x + r, p.y]], 0.5); polyline([[p.x, p.y - r], [p.x, p.y + r]], 0.5); }
       }

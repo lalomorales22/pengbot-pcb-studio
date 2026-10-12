@@ -4,6 +4,7 @@ import { FOOTPRINTS, FP } from './footprints';
 import { MASKS, Sel } from './texture';
 import { penguinBadge } from './penguinArt';
 import { badgeOnly, mcuBoard } from './demo';
+import { addPenguins, esp32Board } from './esp32';
 import { runDrc } from './drc';
 import Board3D, { Tool, ViewName } from './Board3D';
 
@@ -34,7 +35,7 @@ const VIS_LAYERS: LayerId[] = ['TopCopper', 'TopMask', 'TopSilk', 'BottomCopper'
 let uid = 0; const newId = (p: string) => `${p}${Date.now().toString(36)}${(uid++).toString(36)}`;
 
 export default function App() {
-  const [design, setDesign] = useState<Design>(mcuBoard);
+  const [design, setDesign] = useState<Design>(() => esp32Board());
   const [past, setPast] = useState<Design[]>([]);
   const [future, setFuture] = useState<Design[]>([]);
   const dRef = useRef(design); dRef.current = design;
@@ -103,7 +104,7 @@ export default function App() {
 
   const exportZip = async () => {
     const blob = await (await buildZip(design)).generateAsync({ type: 'blob' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'penguin-pcb-gerbers.zip'; a.click();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = (design.name?.startsWith('PengBot ESP32') ? 'pengbot-esp32' : 'penguin-pcb') + '-gerbers.zip'; a.click();
   };
 
   const drc = useMemo(() => runDrc(design), [design]);
@@ -185,7 +186,9 @@ export default function App() {
         <section>
           <h2>Import art</h2>
           <input type="file" accept="image/png,image/jpeg,image/svg+xml" onChange={e => e.target.files?.[0] && loadFile(e.target.files[0])} />
-          <div className="btnrow"><button onClick={loadPenguin}>🐧 Penguin badge</button></div>
+          <div className="btnrow"><button onClick={loadPenguin}>🐧 Penguin badge</button>
+            <button onClick={() => { setImgName("Lalo's penguin"); loadGray('/samples/lalo-penguin.png').then(setGray); }}>🐧 Lalo's penguin</button>
+            <button title="Re-stamp Lalo's penguin over all free silk (top + mirrored bottom)" onClick={() => commit(d => addPenguins({ ...d, art: d.art.filter(a => a.layer !== 'TopSilk' && a.layer !== 'BottomSilk') }))}>🐧🐧 Tile penguins</button></div>
           <div className="muted">{imgName || 'or drop a PNG / JPG / SVG anywhere'}</div>
           {gray && <div className="import">
             {num('threshold', 'Threshold', 1, 254)}
@@ -201,10 +204,11 @@ export default function App() {
         <section>
           <h2>Board</h2>
           {!drcOk && <div className="drcbox">{drcTitle.split('\n').slice(0, 6).map((l, i) => <div key={i}>{l}</div>)}</div>}
-          <div className="muted">{design.chips.length} parts · {design.traces.length} traces · {design.vias.length} vias · {design.pads.length} pads · {design.art.length} art</div>
+          <div className="muted">{design.chips.length} parts · {design.traces.length} traces · {design.vias.length} vias · {design.pads.length} pads · {design.art.length} art{design.penguinCount ? ` · 🐧 ${design.penguinCount.top} top / ${design.penguinCount.bottom} bottom penguins` : ''}</div>
           {design.chips.length > 0 && <ul className="parts">{design.chips.map(c => (
             <li key={c.id} className={sel?.id === c.id ? 'on' : ''} onClick={() => setSel({ kind: 'chip', id: c.id })}><b>{c.ref}</b> {c.value ?? FP[c.fp]?.name}</li>))}</ul>}
           <div className="btnrow">
+            <button onClick={() => { commit(() => esp32Board()); setSel(null); setView(v => ({ name: 'iso', n: v.n + 1 })); }}>🐧 PengBot ESP32</button>
             <button onClick={() => { commit(() => mcuBoard()); setSel(null); setView(v => ({ name: 'iso', n: v.n + 1 })); }}>🐧 PengBot Nano-328</button>
             <button onClick={() => { commit(() => badgeOnly()); setSel(null); setView(v => ({ name: 'iso', n: v.n + 1 })); }}>Badge art board</button>
             <button className="danger" onClick={() => { commit(d => ({ ...emptyDesign(d.board.w, d.board.h), name: 'Untitled' })); setSel(null); }}>Clear</button>
