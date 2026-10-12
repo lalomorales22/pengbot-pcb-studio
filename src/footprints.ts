@@ -166,9 +166,70 @@ const hc49: Footprint = {
   size: [11.4, 5],
 };
 
+
+// ---------- PengBot ESP32 parts ----------
+// ESP32-WROOM-32E (Espressif datasheet land pattern: 18 x 25.5 mm, 1.27 mm pitch, 38 pads + exposed GND).
+// Local origin = module centre, antenna at +y (top 6 mm = keepout, no copper under it on any layer).
+const wroomSide = Array.from({ length: 14 }, (_, i) => +(5.26 - i * 1.27).toFixed(3));
+const wroom: Footprint = {
+  id: 'WROOM32', name: 'ESP32-WROOM-32E', desc: 'Wi-Fi/BT module · 18×25.5 mm · 4 MB flash onboard', prefix: 'U',
+  pads: [
+    ...wroomSide.map((y, i) => ({ x: -9, y, w: 1.5, h: 0.9, shape: 'rect' as const, num: String(i + 1) })),
+    ...Array.from({ length: 10 }, (_, i) => ({ x: +(-5.715 + i * 1.27).toFixed(3), y: -12.5, w: 0.9, h: 1.5, shape: 'rect' as const, num: String(i + 15) })),
+    ...wroomSide.slice().reverse().map((y, i) => ({ x: 9, y, w: 1.5, h: 0.9, shape: 'rect' as const, num: String(i + 25) })),
+    { x: -1, y: 1, w: 5, h: 5, shape: 'rect', num: 'EP' },
+  ],
+  silk: { lines: [[-9.4, 12.4, 9.4, 12.4], [-9.4, 12.4, -9.4, 6.4], [9.4, 12.4, 9.4, 6.4], [-9.4, 6.75, 9.4, 6.75], [-9.4, -13.4, -6.6, -13.4], [6.6, -13.4, 9.4, -13.4]], dots: [[-10.4, 6.3, 0.5]] },
+  body: [
+    { kind: 'box', x: 0, y: 0, z: 0, w: 18, d: 25.5, h: 0.8, color: '#10151f' },
+    { kind: 'box', x: 0, y: -2.8, z: 0.8, w: 16.6, d: 17.6, h: 2.3, color: '#dfe5ec', metal: true, label: 'ESP32' },
+    { kind: 'box', x: 0, y: 9.6, z: 0.8, w: 15, d: 4.2, h: 0.04, color: '#c9a24a', metal: true },
+  ],
+  size: [19.6, 26.4],
+};
+
+// AMS1117-3.3 (SOT-223): 1 GND/ADJ, 2 VOUT, 3 VIN, 4 = tab (VOUT).
+const sot223: Footprint = {
+  id: 'SOT223', name: 'AMS1117-3.3 (SOT-223)', desc: '3.3 V 1 A LDO regulator', prefix: 'U',
+  pads: [
+    { x: -2.3, y: -3.15, w: 1.2, h: 2.0, shape: 'rect', num: '1' }, { x: 0, y: -3.15, w: 1.2, h: 2.0, shape: 'rect', num: '2' },
+    { x: 2.3, y: -3.15, w: 1.2, h: 2.0, shape: 'rect', num: '3' }, { x: 0, y: 3.15, w: 3.6, h: 2.0, shape: 'rect', num: '4' },
+  ],
+  silk: { lines: [[-3.4, 1.9, -3.4, -1.9], [3.4, 1.9, 3.4, -1.9]], dots: [[-3.7, -3.4, 0.4]] },
+  body: [{ kind: 'box', x: 0, y: 0, z: 0, w: 6.5, d: 3.5, h: 1.6, color: BLACK, label: '1117' },
+    { kind: 'box', x: 0, y: 3.15, z: 0, w: 3.0, d: 1.6, h: 0.1, color: LEAD, metal: true },
+    ...[-2.3, 0, 2.3].map(x => ({ kind: 'box' as const, x, y: -2.9, z: 0, w: 0.7, d: 1.6, h: 0.1, color: LEAD, metal: true }))],
+  size: [7.4, 8.4],
+};
+
+// USB-C receptacle, 6-pin power-only (HRO TYPE-C-31-M-17 / GCT USB4125 class). Pads: GND VBUS CC1 CC2 VBUS GND + 2 shell posts.
+// Approximate land pattern — verify against the exact part's datasheet before ordering.
+const usbc: Footprint = {
+  id: 'USBC6P', name: 'USB-C 6P (power)', desc: '5 V in · CC 5.1k pulldowns · board-edge', prefix: 'J',
+  pads: [
+    ...[['A12', -2.5], ['A9', -1.5], ['A5', -0.5], ['B5', 0.5], ['B9', 1.5], ['B12', 2.5]].map(([num, x]) => ({ x: x as number, y: 3.0, w: 0.7, h: 1.6, shape: 'rect' as const, num: num as string })),
+    { x: -4.3, y: 0, w: 1.6, h: 1.6, shape: 'circle', drill: 1.0, num: 'S1' }, { x: 4.3, y: 0, w: 1.6, h: 1.6, shape: 'circle', drill: 1.0, num: 'S2' },
+  ],
+  silk: { lines: [[-4.6, 4.4, -3.2, 4.4], [3.2, 4.4, 4.6, 4.4]], dots: [] },
+  body: [{ kind: 'box', x: 0, y: 0.2, z: 0, w: 8.9, d: 7.0, h: 3.2, color: '#c9ced6', metal: true },
+    { kind: 'box', x: 0, y: -3.2, z: 0.6, w: 7.0, d: 0.8, h: 2.0, color: '#17181b' }],
+  size: [9.6, 7.6],
+};
+
+// 5.1 x 5.1 SMD tactile switch (TS-1187A class). 1-2 and 3-4 are internally connected.
+const sw: Footprint = {
+  id: 'SW_TACT', name: 'Tact switch 5.1 mm SMD', desc: 'EN / BOOT button', prefix: 'SW',
+  pads: [{ x: -3.1, y: 1.85, w: 1.2, h: 1.0, shape: 'rect', num: '1' }, { x: -3.1, y: -1.85, w: 1.2, h: 1.0, shape: 'rect', num: '2' },
+    { x: 3.1, y: 1.85, w: 1.2, h: 1.0, shape: 'rect', num: '3' }, { x: 3.1, y: -1.85, w: 1.2, h: 1.0, shape: 'rect', num: '4' }],
+  silk: { lines: [[-2.6, 2.6, 2.6, 2.6], [-2.6, -2.6, 2.6, -2.6], [-2.6, 1.0, -2.6, -1.0], [2.6, 1.0, 2.6, -1.0]], dots: [] },
+  body: [{ kind: 'box', x: 0, y: 0, z: 0, w: 5.1, d: 5.1, h: 1.4, color: '#c9ced6', metal: true },
+    { kind: 'cyl', x: 0, y: 0, z: 1.4, r: 1.5, h: 0.8, color: '#1c2633' }],
+  size: [7.6, 5.6],
+};
+
 export const DIP28 = dip(28, 'ATMEGA328P');
-export const HDR14 = header(14), HDR6 = header(6);
-export const FOOTPRINTS: Footprint[] = [r0805, c0805, led0805, soic8, qfn16, dip8, DIP28, hc49, HDR6, HDR14, pengbot];
+export const HDR14 = header(14), HDR6 = header(6), HDR13 = header(13), HDR4 = header(4);
+export const FOOTPRINTS: Footprint[] = [r0805, c0805, led0805, soic8, qfn16, dip8, DIP28, hc49, HDR6, HDR14, pengbot, wroom, sot223, usbc, sw, HDR13, HDR4];
 export const FP: Record<string, Footprint> = Object.fromEntries(FOOTPRINTS.map(f => [f.id, f]));
 
 /** Rotate a local point by rot (multiples of 90°, CCW) and translate. */
