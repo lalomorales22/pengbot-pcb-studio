@@ -57,3 +57,14 @@ kbd { margin-left: auto; font: 10px ui-monospace, monospace; color: var(--mute);
 .drc.ok { color: #8ff0b8; border-color: #2a6b4a; background: rgba(30,90,60,.25); }
 .drc.bad { color: var(--beak); border-color: #7a5320; background: rgba(120,80,20,.2); }
 .drcbox { font: 11px ui-monospace, monospace; color: var(--beak); background: rgba(120,80,20,.15); border-radius: 6px; padding: 6px; margin-bottom: 6px; }
+
+/* ---------- Cyberdeck keyboard builder ---------- */
+.kbedit { width: 100%; height: 100%; display: block; background: radial-gradient(circle at 50% 40%, #13243b, #070c14 75%); touch-action: none; }
+.filebtn { position: relative; overflow: hidden; display: inline-flex; align-items: center; cursor: pointer; padding: 5px 9px; border: 1px solid rgba(159,216,255,0.25); border-radius: 6px; font-size: 12px; }
+.filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.seg.wrap { flex-wrap: wrap; }
+.warn { color: #f4a340; margin-top: 4px; }
+.empty { display: grid; place-items: center; height: 100%; color: #9fb4c8; }
+.panel textarea { width: 100%; box-sizing: border-box; background: #0b1422; color: #dbe9f6; border: 1px solid rgba(159,216,255,0.2); border-radius: 6px; font: 11px ui-monospace, monospace; }
+.panel input:not([type]) { background: #0b1422; color: #dbe9f6; border: 1px solid rgba(159,216,255,0.2); border-radius: 5px; padding: 3px 6px; }
+.views button.on { background: #1d4a7c; }

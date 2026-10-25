@@ -87,3 +87,63 @@ console.log(`OK -> out/pengbot-nano-328-gerbers.zip (${buf.length} bytes)`);
   if (f.length) { console.error('ESP32 SMOKE FAIL:', f.join(' | ')); process.exit(1); }
   console.log(`OK -> out/pengbot-esp32-gerbers.zip (${buf.length} bytes)`);
 }
+
+// ---------------- Cyberdeck keyboards ----------------
+{
+  const { newKeyboard, buildKeyboard, autoArrange, fromUnits, parseKle } = await import('../src/kb/keyboard');
+  const { kitFiles, kitZip } = await import('../src/kb/exports');
+  const { stabHalf } = await import('../src/footprints');
+  type KB = ReturnType<typeof newKeyboard>;
+  async function check(kb: KB, file: string, expect: { touch: boolean; minOutline: number }) {
+    const b = buildKeyboard(kb), d = b.design, drc = runDrc(d);
+    const buf = await (await buildZip(d)).generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(`out/${file}-gerbers.zip`, buf);
+    const kbuf = await (await kitZip(kb, b)).generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(`out/${file}-kit.zip`, kbuf);
+    const z = await JSZip.loadAsync(buf), rd = (n: string) => z.file(n)?.async('string') ?? Promise.resolve('');
+    const [gtl, gbl, gbo, gko, gbp, drl, npth, cpl] = await Promise.all(['penguin-pcb.GTL', 'penguin-pcb.GBL', 'penguin-pcb.GBO', 'penguin-pcb.GKO', 'penguin-pcb.GBP', 'penguin-pcb.DRL', 'penguin-pcb-NPTH.DRL', 'cpl.csv'].map(rd));
+    const kit = kitFiles(kb, b);
+    const stabs = kb.switch === 'mx' ? kb.keys.filter(k => stabHalf(k.w)).length * 4 : 0;
+    const s = {
+      board: `${d.board.w.toFixed(1)}x${d.board.h.toFixed(1)} mm`, keys: kb.keys.length, matrix: `${b.matrix.rows}x${b.matrix.cols}`, rows: b.matrix.rowPins.join(','), cols: b.matrix.colPins.join(','), special: b.matrix.special,
+      traces: d.traces.length, vias: d.vias.length, penguinsBack: d.penguinCount?.bottom, routeMs: b.ms,
+      outlineSegs: count(gko, /D01\*/g), npthHits: count(npth, /^X/gm), plated: count(drl, /^X/gm), bottomCuDraws: count(gbl, /D01\*/g), topCuDraws: count(gtl, /D01\*/g),
+      bottomSilkRegions: count(gbo, /G36\*/g), bottomPastePads: count(gbp, /G36\*/g), cplBottom: count(cpl, /,Bottom,/g),
+      drc: { violations: drc.violations.length, shorts: drc.shorts.length, unrouted: drc.unrouted.length, nets: Object.keys(drc.nets).length },
+      kit: Object.keys(kit).length, zip: buf.length, kitZip: kbuf.length,
+    };
+    console.log(file, s);
+    const f: string[] = [];
+    if (b.failed.length || b.warnings.length) f.push('build: ' + [...b.failed, ...b.warnings].join('; '));
+    if (drc.violations.length || drc.shorts.length || drc.unrouted.length) f.push('DRC: ' + [...drc.shorts, ...drc.unrouted, ...drc.violations].slice(0, 8).join('; '));
+    if (s.outlineSegs < expect.minOutline) f.push('outline ' + s.outlineSegs);
+    if (s.npthHits !== kb.keys.length * 5 + stabs + kb.holes.length) f.push(`npth ${s.npthHits} != ${kb.keys.length * 5 + stabs + kb.holes.length}`);
+    if (s.cplBottom !== kb.keys.length) f.push('diodes on bottom in CPL');
+    if (s.bottomPastePads < kb.keys.length * 4) f.push('bottom paste');
+    if (!d.penguinCount || d.penguinCount.bottom < 100) f.push('penguins');
+    if (expect.touch !== d.chips.some(c => c.id === 'J2')) f.push('touchpad header');
+    const qmk = Object.entries(kit).find(([k]) => k.endsWith('keyboard.json'))!;
+    const info = JSON.parse(qmk[1]); if (info.layouts.LAYOUT.layout.length !== kb.keys.length || info.matrix_pins.cols.length !== b.matrix.cols) f.push('qmk json');
+    if (!kit['firmware/kmk/code.py'].includes('keyboard.col_pins = (board.')) f.push('kmk');
+    if (count(kit['plate/plate.svg'], /<path/g) !== kb.keys.length + 2) f.push('plate cutouts');
+    if (!kit['plate/plate.dxf'].includes('LWPOLYLINE')) f.push('dxf');
+    for (const t of [gtl, gbl, gbo, gko]) if (!t.trim().endsWith('M02*')) f.push('M02');
+    if (f.length) { console.error(`KEYBOARD ${file} SMOKE FAIL:`, f.join(' | ')); process.exit(1); }
+    console.log(`OK -> out/${file}-gerbers.zip (${buf.length} bytes) + out/${file}-kit.zip`);
+  }
+
+  // 1) Deck 40: compact staggered cyberdeck, MX hotswap, Cirque 40 mm touchpad, QWIIC header
+  const deck = newKeyboard('deck40', 'mx'); deck.name = 'PengDeck 40';
+  await check(deck, 'pengdeck40-touchpad', { touch: true, minOutline: 4 });
+
+  // 2) Custom shape (hand-drawn chamfered outline), Choc v1, no touchpad, layout from KLE JSON
+  const kle = `[{"name":"PengSplit 36"},["Q","W","E","R","T",{"x":1},"Y","U","I","O","P"],["A","S","D","F","G",{"x":1},"H","J","K","L",";"],["Z","X","C","V","B",{"x":1},"N","M",",",".","/"],[{"x":2},"Gui",{"w":1.5},"Lower",{"w":1.5},"Space",{"w":1.5},"Enter",{"w":1.5},"Raise","Alt"]]`;
+  const parsed = parseKle(kle);
+  let cus = autoArrange({ ...fromUnits(parsed.keys, 'PengSplit 36 custom', 'choc'), i2c: false });
+  const xs = cus.outline.map(p => p[0]), ys = cus.outline.map(p => p[1]);
+  const [x1, y1, x2, y2] = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], mx = (x1 + x2) / 2;
+  cus = { ...cus, shape: 'custom', radius: 3, ctrl: { x: mx, y: y2 - 11, rot: 90 },
+    outline: [[x1 + 8, y1], [mx - 12, y1], [mx, y1 + 4.5], [mx + 12, y1], [x2 - 8, y1], [x2, y1 + 8], [x2, y2 - 22], [mx + 30, y2 - 22], [mx + 22, y2], [mx - 22, y2], [mx - 30, y2 - 22], [x1, y2 - 22], [x1, y1 + 8]] };
+  cus.holes = [{ id: 'h1', x: x1 + 9.5, y: y1 + 4.5, size: 'M2.5' }, { id: 'h2', x: x2 - 9.5, y: y1 + 4.5, size: 'M2.5' }, { id: 'h3', x: mx, y: y1 + 12.5, size: 'M2' }];
+  await check(cus, 'pengsplit36-custom-shape', { touch: false, minOutline: 20 });
+}

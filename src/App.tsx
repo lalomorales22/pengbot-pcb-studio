@@ -7,6 +7,7 @@ import { badgeOnly, mcuBoard } from './demo';
 import { addPenguins, esp32Board } from './esp32';
 import { runDrc } from './drc';
 import Board3D, { Tool, ViewName } from './Board3D';
+import KeyboardStudio from './kb/KeyboardStudio';
 
 const MAXPX = 500;
 async function loadGray(src: string): Promise<Gray> {
@@ -35,7 +36,15 @@ const VIS_LAYERS: LayerId[] = ['TopCopper', 'TopMask', 'TopSilk', 'BottomCopper'
 let uid = 0; const newId = (p: string) => `${p}${Date.now().toString(36)}${(uid++).toString(36)}`;
 
 export default function App() {
-  const [design, setDesign] = useState<Design>(() => esp32Board());
+  const [mode, setMode] = useState<'pcb' | 'keyboard'>(() => (location.hash === '#keyboard' ? 'keyboard' : 'pcb'));
+  useEffect(() => { history.replaceState(null, '', mode === 'keyboard' ? '#keyboard' : '#'); }, [mode]);
+  const [inject, setInject] = useState<Design | null>(null);
+  if (mode === 'keyboard') return <KeyboardStudio onExit={() => setMode('pcb')} onOpenInStudio={d => { setInject(d); setMode('pcb'); }} />;
+  return <PcbStudio initial={inject} onKeyboard={() => setMode('keyboard')} />;
+}
+
+function PcbStudio({ initial, onKeyboard }: { initial: Design | null; onKeyboard(): void }) {
+  const [design, setDesign] = useState<Design>(() => initial ?? esp32Board());
   const [past, setPast] = useState<Design[]>([]);
   const [future, setFuture] = useState<Design[]>([]);
   const dRef = useRef(design); dRef.current = design;
@@ -121,12 +130,13 @@ export default function App() {
     <div className="app" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) loadFile(f); }}>
       <header className="top">
         <img src="/penguin.svg" alt="" className="logo" />
-        <div className="title"><h1>Penguin PCB Studio</h1><span>{design.name ?? 'Untitled'} · {design.board.w} × {design.board.h} mm · 2 layers · 1.6 mm FR-4</span></div>
+        <div className="title"><h1>Penguin PCB Studio</h1><span>{design.name ?? 'Untitled'} · {+design.board.w.toFixed(1)} × {+design.board.h.toFixed(1)} mm · 2 layers · 1.6 mm FR-4</span></div>
         <div className="spacer" />
         <span className={'drc ' + (drcOk ? 'ok' : 'bad')} title={drcTitle}>{drcOk ? '✓ DRC clean' : `⚠ DRC ${drc.violations.length + drc.shorts.length + drc.unrouted.length}`}</span>
         <button onClick={undo} disabled={!past.length} title="Ctrl+Z — undo last stroke / action">↶ Undo</button>
         <button onClick={redo} disabled={!future.length} title="Ctrl+Shift+Z">↷ Redo</button>
         <button className="primary" onClick={exportZip}>⬇ Export Gerber zip</button>
+        <button onClick={onKeyboard} title="Design a custom cyberdeck keyboard PCB">⌨ Keyboard builder</button>
       </header>
 
       <aside className="panel">
@@ -210,6 +220,7 @@ export default function App() {
           <div className="btnrow">
             <button onClick={() => { commit(() => esp32Board()); setSel(null); setView(v => ({ name: 'iso', n: v.n + 1 })); }}>🐧 PengBot ESP32</button>
             <button onClick={() => { commit(() => mcuBoard()); setSel(null); setView(v => ({ name: 'iso', n: v.n + 1 })); }}>🐧 PengBot Nano-328</button>
+            <button onClick={onKeyboard}>⌨ Cyberdeck keyboard</button>
             <button onClick={() => { commit(() => badgeOnly()); setSel(null); setView(v => ({ name: 'iso', n: v.n + 1 })); }}>Badge art board</button>
             <button className="danger" onClick={() => { commit(d => ({ ...emptyDesign(d.board.w, d.board.h), name: 'Untitled' })); setSel(null); }}>Clear</button>
           </div>
