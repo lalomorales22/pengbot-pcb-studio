@@ -7,8 +7,8 @@ import { textRects } from './font';
 export const NM = 1_000_000; // nm per mm
 export const BOARD = { w: 50 * NM, h: 50 * NM };
 
-export type LayerId = 'TopCopper' | 'TopMask' | 'TopSilk' | 'TopPaste' | 'BottomCopper' | 'BottomMask' | 'BottomSilk' | 'Outline';
-export const LAYERS: LayerId[] = ['TopCopper', 'TopMask', 'TopSilk', 'TopPaste', 'BottomCopper', 'BottomMask', 'BottomSilk', 'Outline'];
+export type LayerId = 'TopCopper' | 'TopMask' | 'TopSilk' | 'TopPaste' | 'BottomCopper' | 'BottomMask' | 'BottomSilk' | 'BottomPaste' | 'Outline';
+export const LAYERS: LayerId[] = ['TopCopper', 'TopMask', 'TopSilk', 'TopPaste', 'BottomCopper', 'BottomMask', 'BottomSilk', 'BottomPaste', 'Outline'];
 export const ART_LAYERS: LayerId[] = ['TopSilk', 'TopCopper', 'TopMask'];
 
 /** Axis-aligned rect in nm (y up, origin = board bottom-left). */
@@ -74,10 +74,11 @@ export function vectorize(g: Gray, o: VecOpts, bw = BOARD.w, bh = BOARD.h): Rect
 // ---------- Design model (mm, y up, origin = board bottom-left) ----------
 export type Pt = [number, number];
 export type DrawLayer = 'TopCopper' | 'TopSilk';
-export interface Trace { id: string; layer: DrawLayer; width: number; pts: Pt[]; net?: string; brush?: boolean }
+export type TraceLayer = DrawLayer | 'BottomCopper';
+export interface Trace { id: string; layer: TraceLayer; width: number; pts: Pt[]; net?: string; brush?: boolean }
 export interface Via { id: string; x: number; y: number; d: number; drill: number; net?: string }
 export interface UserPad { id: string; x: number; y: number; w: number; h: number; shape: 'rect' | 'circle'; net?: string }
-export interface Chip { id: string; fp: string; x: number; y: number; rot: number; ref: string; value?: string; nets?: Record<string, string> }
+export interface Chip { id: string; fp: string; x: number; y: number; rot: number; ref: string; value?: string; nets?: Record<string, string>; color?: string }
 export interface SilkText { id: string; text: string; x: number; y: number; px: number; rot: 0 | 90 }
 export interface Pour { layer: 'BottomCopper'; net: string; clearance: number; margin: number }
 export interface Design {
@@ -86,19 +87,45 @@ export interface Design {
   /** Copper keepouts (mm), e.g. the ESP32 antenna: cleared from pours on every layer, no traces/pads allowed. */
   penguinCount?: { top: number; bottom: number };
   keepouts?: { x1: number; y1: number; x2: number; y2: number; label?: string }[];
+  /** Custom board outline (mm, closed polygon, CCW). Absent = rectangle 0,0..w,h. */
+  outline?: Pt[];
+  /** Silk outlines (mm polylines) drawn on top silk, e.g. touchpad area. */
+  silkPolys?: { pts: Pt[]; layer: 'TopSilk' | 'BottomSilk'; w: number }[];
+}
+export function boardOutline(d: Design): Pt[] { return d.outline ?? [[0, 0], [d.board.w, 0], [d.board.w, d.board.h], [0, d.board.h]]; }
+export function pointInPoly(p: Pt, poly: Pt[]) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > p[1]) !== (yj > p[1]) && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+/** Distance from p to the polygon boundary. */
+export function distToPoly(p: Pt, poly: Pt[]) {
+  let m = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length], dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+    const t = L ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L)) : 0;
+    m = Math.min(m, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy));
+  }
+  return m;
 }
 export const emptyDesign = (w = 50, h = 50): Design => ({ board: { w, h }, art: [], traces: [], vias: [], pads: [], chips: [], texts: [], pours: [] });
 
 // JLCPCB-friendly defaults (2-layer, 1 oz): see README
 export const RULES = { minTrace: 0.15, minClear: 0.2, viaD: 0.6, viaDrill: 0.3, maskExp: 0.05, silkClear: 0.15, minSilk: 0.15, edgeClear: 0.3 };
 
-export interface AbsPad { x: number; y: number; w: number; h: number; shape: 'rect' | 'circle'; drill?: number; chip?: string; ref?: string; num?: string; net?: string }
+/** side 'B' = bottom-only SMD. npth = non-plated hole (no copper, drill = w). */
+export interface AbsPad { x: number; y: number; w: number; h: number; shape: 'rect' | 'circle'; drill?: number; chip?: string; ref?: string; num?: string; net?: string; side?: 'B'; npth?: boolean }
+export const onTop = (p: AbsPad) => !p.npth && (p.side !== 'B' || !!p.drill);
+export const onBot = (p: AbsPad) => !p.npth && (p.side === 'B' || !!p.drill);
 export function chipPads(c: Chip): AbsPad[] {
   const f = FP[c.fp]; if (!f) return [];
   const swap = c.rot % 180 !== 0;
   return f.pads.map(p => {
     const [x, y] = xf(p.x, p.y, c.rot, c.x, c.y);
-    return { x, y, w: swap ? p.h : p.w, h: swap ? p.w : p.h, shape: p.shape, drill: p.drill, chip: c.id, ref: c.ref, num: p.num, net: c.nets?.[p.num] };
+    return { x, y, w: swap ? p.h : p.w, h: swap ? p.w : p.h, shape: p.shape, drill: p.drill, chip: c.id, ref: c.ref, num: p.num, net: p.npth ? undefined : c.nets?.[p.num], side: p.side, npth: p.npth };
   });
 }
 export function allPads(d: Design): AbsPad[] { return [...d.chips.flatMap(chipPads), ...d.pads.map(p => ({ ...p }))]; }
@@ -124,7 +151,7 @@ const clear = (p: Prim): Prim => ({ ...p, pol: 'C' });
 export function pourPrims(d: Design, pr: Pour): Prim[] {
   const { w, h } = d.board, m = pr.margin, cl = pr.clearance;
   const out: Prim[] = [{ t: 'rect', x1: m, y1: m, x2: w - m, y2: h - m }];
-  const holes = [...allPads(d).filter(p => p.drill), ...d.vias.map(v => ({ x: v.x, y: v.y, w: v.d, h: v.d, shape: 'circle' as const, net: v.net, drill: v.drill }))];
+  const holes = [...allPads(d).filter(p => p.drill || p.side === 'B'), ...d.vias.map(v => ({ x: v.x, y: v.y, w: v.d, h: v.d, shape: 'circle' as const, net: v.net, drill: v.drill }))];
   for (const p of holes) out.push(clear(padPrim(p, cl)));
   for (const k of d.keepouts ?? []) out.push(clear({ t: 'rect', x1: k.x1, y1: k.y1, x2: k.x2, y2: k.y2 }));
   for (const t of d.traces.filter(t => (t.layer as string) === pr.layer)) out.push(clear({ t: 'line', pts: t.pts, w: t.width + 2 * cl }));
@@ -137,27 +164,33 @@ export function pourPrims(d: Design, pr: Pour): Prim[] {
 
 export function layerPrims(d: Design, layer: LayerId): { rects: Rect[]; prims: Prim[] } {
   const rects = d.art.filter(a => a.layer === layer).flatMap(a => a.rects);
-  const pads = allPads(d), tht = pads.filter(p => p.drill), smd = pads.filter(p => !p.drill);
+  const pads = allPads(d), tht = pads.filter(p => p.drill && !p.npth), npth = pads.filter(p => p.npth);
+  const top = pads.filter(onTop), bot = pads.filter(onBot);
+  const smdTop = pads.filter(p => !p.drill && p.side !== 'B'), smdBot = pads.filter(p => !p.drill && p.side === 'B');
   const prims: Prim[] = [];
-  const traces = (l: DrawLayer) => d.traces.filter(t => t.layer === l).forEach(t => prims.push({ t: 'line', pts: t.pts, w: t.width }));
+  const traces = (l: TraceLayer) => d.traces.filter(t => t.layer === l).forEach(t => prims.push({ t: 'line', pts: t.pts, w: t.width }));
   const viaPrims = () => d.vias.forEach(v => prims.push({ t: 'circ', x: v.x, y: v.y, d: v.d }));
+  const chipSilkOn = (side: 'T' | 'B') => { for (const c of d.chips) { if ((FP[c.fp]?.silkSide ?? 'T') !== side) continue; const s = chipSilk(c); s.lines.forEach(l => prims.push({ t: 'line', pts: l, w: 0.15 })); s.dots.forEach(([x, y, dd]) => prims.push({ t: 'circ', x, y, d: dd })); } };
+  const polys = (l: LayerId) => (d.silkPolys ?? []).filter(p => p.layer === l).forEach(p => prims.push({ t: 'line', pts: p.pts, w: p.w }));
   switch (layer) {
-    case 'TopCopper': traces('TopCopper'); pads.forEach(p => prims.push(padPrim(p))); viaPrims(); break;
+    case 'TopCopper': traces('TopCopper'); top.forEach(p => prims.push(padPrim(p))); viaPrims(); break;
     case 'BottomCopper':
       d.pours.filter(p => p.layer === 'BottomCopper').forEach(p => prims.push(...pourPrims(d, p)));
-      tht.forEach(p => prims.push(padPrim(p))); viaPrims(); break;
-    case 'TopMask': pads.forEach(p => prims.push(padPrim(p, RULES.maskExp))); break;
-    case 'BottomMask': tht.forEach(p => prims.push(padPrim(p, RULES.maskExp))); break;
-    case 'TopPaste': smd.forEach(p => prims.push(padPrim(p))); break;
+      traces('BottomCopper'); bot.forEach(p => prims.push(padPrim(p))); viaPrims(); break;
+    case 'TopMask': [...top, ...npth].forEach(p => prims.push(padPrim(p, RULES.maskExp))); break;
+    case 'BottomMask': [...bot, ...npth].forEach(p => prims.push(padPrim(p, RULES.maskExp))); break;
+    case 'TopPaste': smdTop.forEach(p => prims.push(padPrim(p))); break;
+    case 'BottomPaste': smdBot.forEach(p => prims.push(padPrim(p))); break;
     case 'TopSilk':
       rects.push(...textRectsNm(d));
-      traces('TopSilk');
-      for (const c of d.chips) { const s = chipSilk(c); s.lines.forEach(l => prims.push({ t: 'line', pts: l, w: 0.15 })); s.dots.forEach(([x, y, dd]) => prims.push({ t: 'circ', x, y, d: dd })); }
-      pads.forEach(p => prims.push(clear(padPrim(p, RULES.maskExp + RULES.silkClear)))); // keep silk off pads
+      traces('TopSilk'); polys('TopSilk'); chipSilkOn('T');
+      [...top, ...npth].forEach(p => prims.push(clear(padPrim(p, RULES.maskExp + RULES.silkClear)))); // keep silk off pads
       break;
     case 'BottomSilk':
-      tht.forEach(p => prims.push(clear(padPrim(p, RULES.maskExp + RULES.silkClear))));
+      chipSilkOn('B'); polys('BottomSilk');
+      [...bot, ...npth].forEach(p => prims.push(clear(padPrim(p, RULES.maskExp + RULES.silkClear))));
       d.vias.forEach(v => prims.push(clear({ t: 'circ', x: v.x, y: v.y, d: v.d + 2 * RULES.silkClear })));
+      void tht;
       break;
   }
   return { rects, prims };
@@ -173,19 +206,21 @@ const FILES: Record<LayerId, { ext: string; fn: string; pol: string; desc: strin
   BottomCopper: { ext: 'GBL', fn: 'Copper,L2,Bot', pol: 'Positive', desc: 'Bottom copper (GND pour)' },
   BottomMask: { ext: 'GBS', fn: 'Soldermask,Bot', pol: 'Negative', desc: 'Bottom solder mask' },
   BottomSilk: { ext: 'GBO', fn: 'Legend,Bot', pol: 'Positive', desc: 'Bottom silkscreen' },
+  BottomPaste: { ext: 'GBP', fn: 'Paste,Bot', pol: 'Positive', desc: 'Bottom paste (stencil, SMD pads)' },
   Outline: { ext: 'GKO', fn: 'Profile,NP', pol: 'Positive', desc: 'Board outline' },
 };
 export const fileName = (l: LayerId) => `${PFX}.${FILES[l].ext}`;
 const c = (n: number) => String(Math.round(n));
 const n = (mm: number) => c(mm * NM);
 
-export function gerber(layer: LayerId, rects: Rect[], prims: Prim[] = [], board = { w: 50, h: 50 }): string {
+export function gerber(layer: LayerId, rects: Rect[], prims: Prim[] = [], board = { w: 50, h: 50 }, outline?: Pt[]): string {
   const f = FILES[layer];
   const L = ['G04 Penguin PCB Studio*', '%TF.GenerationSoftware,LaloMorales,PenguinPCBStudio,0.3*%', `%TF.FileFunction,${f.fn}*%`,
     `%TF.FilePolarity,${f.pol}*%`, '%FSLAX46Y46*%', '%MOMM*%', '%LPD*%'];
   if (layer === 'Outline') {
-    L.push('%TA.AperFunction,Profile*%', '%ADD10C,0.100000*%', '%TD*%', 'D10*', 'G01*',
-      `X0Y0D02*`, `X${n(board.w)}Y0D01*`, `X${n(board.w)}Y${n(board.h)}D01*`, `X0Y${n(board.h)}D01*`, 'X0Y0D01*');
+    const o = outline ?? [[0, 0], [board.w, 0], [board.w, board.h], [0, board.h]];
+    L.push('%TA.AperFunction,Profile*%', '%ADD10C,0.100000*%', '%TD*%', 'D10*', 'G01*');
+    [...o, o[0]].forEach(([x, y], i) => L.push(`X${n(x)}Y${n(y)}${i ? 'D01' : 'D02'}*`));
     L.push('M02*'); return L.join('\n') + '\n';
   }
   const ap = new Map<string, number>();
@@ -213,15 +248,16 @@ export function gerber(layer: LayerId, rects: Rect[], prims: Prim[] = [], board 
   return L.join('\n') + '\n';
 }
 
-export function drills(d: Design): { x: number; y: number; dia: number; plated: boolean }[] {
-  return [...allPads(d).filter(p => p.drill).map(p => ({ x: p.x, y: p.y, dia: p.drill!, plated: true })),
+export function drills(d: Design, npth = false): { x: number; y: number; dia: number; plated: boolean }[] {
+  if (npth) return allPads(d).filter(p => p.npth).map(p => ({ x: p.x, y: p.y, dia: p.drill ?? p.w, plated: false }));
+  return [...allPads(d).filter(p => p.drill && !p.npth).map(p => ({ x: p.x, y: p.y, dia: p.drill!, plated: true })),
     ...d.vias.map(v => ({ x: v.x, y: v.y, dia: v.drill, plated: true }))];
 }
 
-export function excellon(d: Design = emptyDesign()): string {
-  const hs = drills(d);
+export function excellon(d: Design = emptyDesign(), npth = false): string {
+  const hs = drills(d, npth);
   const tools = [...new Set(hs.map(h => h.dia.toFixed(3)))].sort();
-  const L = ['M48', '; Penguin PCB Studio - plated holes', 'FMAT,2', 'METRIC,TZ'];
+  const L = ['M48', `; Penguin PCB Studio - ${npth ? 'NON-plated holes (NPTH)' : 'plated holes'}`, 'FMAT,2', 'METRIC,TZ'];
   tools.forEach((t, i) => L.push(`T${i + 1}C${t}`));
   if (!tools.length) L.push('T1C0.300');
   L.push('%', 'G90', 'G05');
@@ -238,7 +274,7 @@ export function bomCsv(d: Design): string {
   return ['Comment,Designator,Footprint,LCSC Part #', ...rows].join('\n') + '\n';
 }
 export function cplCsv(d: Design): string {
-  return ['Designator,Mid X,Mid Y,Layer,Rotation', ...d.chips.map(c => `${c.ref},${c.x.toFixed(3)}mm,${c.y.toFixed(3)}mm,Top,${c.rot}`)].join('\n') + '\n';
+  return ['Designator,Mid X,Mid Y,Layer,Rotation', ...d.chips.map(c => `${c.ref},${c.x.toFixed(3)}mm,${c.y.toFixed(3)}mm,${FP[c.fp]?.side === 'B' ? 'Bottom' : 'Top'},${c.rot}`)].join('\n') + '\n';
 }
 
 function readme(d: Design) {
@@ -246,7 +282,7 @@ function readme(d: Design) {
 ${d.board.w} x ${d.board.h} mm, 2 layers, FR-4 1.6 mm, 1 oz, HASL or ENIG. Upload this zip as-is to JLCPCB (or OSH Park).
 
 ${LAYERS.map(l => `${fileName(l).padEnd(18)} ${FILES[l].desc}`).join('\n')}
-${(PFX + '.DRL').padEnd(18)} Excellon drills (${drills(d).length} plated holes)
+${(PFX + '.DRL').padEnd(18)} Excellon drills (${drills(d).length} plated holes)${drills(d, true).length ? `\n${(PFX + '-NPTH.DRL').padEnd(18)} Excellon NON-plated holes (${drills(d, true).length}: switch posts, mounting holes)` : ''}
 bom.csv / cpl.csv  BOM + placement (JLCPCB column names; fill LCSC part numbers before ordering assembly)
 
 Parts: ${d.chips.map(c => `${c.ref}=${c.value ?? c.fp}`).join(', ') || 'none'}
@@ -263,8 +299,9 @@ Format: Gerber RS-274X with X2 file attributes, mm, 4.6 format; clear polarity (
 export async function buildZip(input: Design | Art[]): Promise<JSZip> {
   const d: Design = Array.isArray(input) ? { ...emptyDesign(), art: input } : input;
   const zip = new JSZip();
-  for (const l of LAYERS) { const { rects, prims } = layerPrims(d, l); zip.file(fileName(l), gerber(l, rects, prims, d.board)); }
+  for (const l of LAYERS) { if (l === 'BottomPaste' && !allPads(d).some(p => p.side === 'B' && !p.drill)) continue; const { rects, prims } = layerPrims(d, l); zip.file(fileName(l), gerber(l, rects, prims, d.board, d.outline)); }
   zip.file(PFX + '.DRL', excellon(d));
+  if (drills(d, true).length) zip.file(PFX + '-NPTH.DRL', excellon(d, true));
   if (d.chips.length) { zip.file('bom.csv', bomCsv(d)); zip.file('cpl.csv', cplCsv(d)); }
   zip.file('README.txt', readme(d));
   return zip;
