@@ -1,15 +1,19 @@
 // Footprint library. Units: mm, origin = footprint centre, +y = up (board coords).
 export type PadShape = 'rect' | 'circle';
-export interface PadDef { x: number; y: number; w: number; h: number; shape: PadShape; drill?: number; num: string }
+export interface PadDef { x: number; y: number; w: number; h: number; shape: PadShape; drill?: number; num: string; side?: 'B'; npth?: boolean }
 export type BodyPart =
-  | { kind: 'box'; x: number; y: number; z: number; w: number; d: number; h: number; color: string; metal?: boolean; label?: string }
-  | { kind: 'cyl'; x: number; y: number; z: number; r: number; h: number; color: string; metal?: boolean };
+  | { kind: 'box'; x: number; y: number; z: number; w: number; d: number; h: number; color: string; metal?: boolean; label?: string; cap?: boolean; under?: boolean }
+  | { kind: 'cyl'; x: number; y: number; z: number; r: number; h: number; color: string; metal?: boolean; under?: boolean };
 export interface Footprint {
   id: string; name: string; desc: string; prefix: string;
   pads: PadDef[];
   silk: { lines: [number, number, number, number][]; dots: [number, number, number][] }; // dots: x,y,diameter
   body: BodyPart[];
   size: [number, number]; // courtyard w,h for hit/ghost
+  /** 'B' = SMD part assembled on the bottom (CPL layer Bottom). */
+  side?: 'B';
+  /** Which silkscreen the footprint outline goes on (default top). */
+  silkSide?: 'T' | 'B';
 }
 
 const BLACK = '#17181b', LEAD = '#c9ced6';
@@ -238,3 +242,90 @@ export function xf(x: number, y: number, rot: number, cx: number, cy: number): [
   const [a, b] = r === 90 ? [-y, x] : r === 180 ? [-x, -y] : r === 270 ? [y, -x] : [x, y];
   return [cx + a, cy + b];
 }
+
+// ---------- Keyboard parts ----------
+// Switch land patterns are copied 1:1 from kiswitch (MIT/CC-BY-SA, github.com/kiswitch/kiswitch):
+//   Switch_Keyboard_Hotswap_Kailh.pretty/SW_Hotswap_Kailh_MX_1.00u.kicad_mod
+//   Switch_Keyboard_Hotswap_Kailh.pretty/SW_Hotswap_Kailh_Choc_V1_1.00u.kicad_mod
+//   Mounting_Keyboard_Stabilizer.pretty/Stabilizer_Cherry_MX_{2.00u,6.25u,7.00u}.kicad_mod
+// KiCad is y-down; we are y-up, so every y below is negated vs the .kicad_mod file.
+// Pad 1 / pad 2 are the Kailh socket's SMD tabs on the BOTTOM copper (B.Cu); all round holes are NPTH.
+export type SwitchKind = 'mx' | 'choc';
+export const U = 19.05;
+const npth = (x: number, y: number, d: number): PadDef => ({ x, y, w: d, h: d, shape: 'circle', drill: d, npth: true, num: '' });
+const SW_DEF: Record<SwitchKind, { holes: PadDef[]; pads: PadDef[]; cut: number; name: string }> = {
+  mx: {
+    name: 'MX hotswap (Kailh CPG151101S11)', cut: 14,
+    holes: [npth(-3.81, 2.54, 3.05), npth(2.54, 5.08, 3.05), npth(0, 0, 4), npth(-5.08, 0, 1.75), npth(5.08, 0, 1.75)],
+    pads: [{ x: -7.085, y: 2.54, w: 2.55, h: 2.5, shape: 'rect', num: '1', side: 'B' }, { x: 5.842, y: 5.08, w: 2.55, h: 2.5, shape: 'rect', num: '2', side: 'B' }],
+  },
+  choc: {
+    name: 'Choc v1 hotswap (Kailh CPG135001S30)', cut: 13.8,
+    holes: [npth(0, 5.9, 3.05), npth(5, 3.8, 3.05), npth(0, 0, 3.45), npth(-5.5, 0, 1.9), npth(5.5, 0, 1.9)],
+    pads: [{ x: -3.5, y: 6, w: 2.55, h: 2.5, shape: 'rect', num: '1', side: 'B' }, { x: 8.5, y: 3.8, w: 2.55, h: 2.5, shape: 'rect', num: '2', side: 'B' }],
+  },
+};
+/** Plate cutout: Cherry MX spec 14.0 mm square; Kailh Choc v1 spec 13.8 mm square. */
+export const plateCut = (k: SwitchKind) => SW_DEF[k].cut;
+/** Cherry PCB-mount stabilizer half-spacing for a key width (kiswitch Stabilizer_Cherry_MX_*). */
+export const stabHalf = (w: number) => (w >= 7 ? 57.15 : w >= 6 ? 50 : w >= 2 ? 11.938 : 0);
+export const CAP_COLORS = { alpha: '#eef3f7', mod: '#16181d', accent: '#f4a340', ice: '#9fd8ff' };
+
+/** Key switch + Kailh socket (+ MX stabilizer holes for >= 2u) + keycap body, for width w (in u). */
+export function keyFp(kind: SwitchKind, w: number): Footprint {
+  const id = `KEY_${kind.toUpperCase()}_${w}U`;
+  if (FP[id]) return FP[id];
+  const def = SW_DEF[kind], sh = kind === 'mx' ? stabHalf(w) : 0;
+  const stab = sh ? [npth(-sh, 6.985, 3.048), npth(sh, 6.985, 3.048), npth(-sh, -8.225, 3.9878), npth(sh, -8.225, 3.9878)] : [];
+  const c = def.cut / 2 + 0.3, cw = w * U - 1.1, choc = kind === 'choc';
+  const f: Footprint = {
+    id, name: `${kind === 'mx' ? 'MX' : 'Choc'} ${w}u`, desc: def.name + (sh ? ' + Cherry stab' : ''), prefix: 'SW',
+    pads: [...def.pads, ...def.holes, ...stab],
+    silk: { lines: [[-c, c, c, c], [c, c, c, -c], [c, -c, -c, -c], [-c, -c, -c, c]], dots: [] },
+    body: [
+      { kind: 'box', x: 0, y: 0, z: 0, w: 14, d: 14, h: choc ? 2.2 : 5, color: '#20232a' },
+      { kind: 'box', x: 0, y: 0, z: choc ? 2.2 : 5, w: 15, d: 15, h: choc ? 0.8 : 3.5, color: choc ? '#3b3f48' : '#2a2d35' },
+      { kind: 'box', x: 0, y: 0, z: choc ? 3 : 8.5, w: cw, d: U - 1.1 - (choc ? 1 : 0), h: choc ? 3 : 7.5, color: CAP_COLORS.alpha, cap: true },
+      // Kailh socket body on the back
+      { kind: 'box', x: choc ? 2.5 : -0.6, y: choc ? 4.9 : 3.8, z: 0, w: choc ? 9.5 : 10.9, d: choc ? 4.6 : 4.6, h: 1.8, color: '#e8e4da', under: true },
+    ],
+    size: [w * U, U], silkSide: 'T',
+  };
+  FP[id] = f; return f;
+}
+
+// 1N4148W, SOD-123 — pads from KiCad Diode_SMD.pretty/D_SOD-123.kicad_mod (±1.65, 0.9 × 1.2). Pad 1 = cathode. Bottom side.
+export const dSod123B: Footprint = {
+  id: 'D_SOD123_B', name: '1N4148W SOD-123 (back)', desc: 'Per-key matrix diode, bottom side, pad 1 = cathode', prefix: 'D', side: 'B', silkSide: 'B',
+  pads: [{ x: -1.65, y: 0, w: 0.9, h: 1.2, shape: 'rect', num: '1', side: 'B' }, { x: 1.65, y: 0, w: 0.9, h: 1.2, shape: 'rect', num: '2', side: 'B' }],
+  silk: { lines: [[-0.9, 1.0, 0.9, 1.0], [-0.9, -1.0, 0.9, -1.0], [-0.55, 0.8, -0.55, -0.8]], dots: [] },
+  body: [{ kind: 'box', x: 0, y: 0, z: 0, w: 2.7, d: 1.6, h: 1.1, color: BLACK, under: true }, { kind: 'box', x: -0.9, y: 0, z: 1.1, w: 0.3, d: 1.6, h: 0.02, color: '#c9ced6', under: true }],
+  size: [4.4, 2.2],
+};
+
+/** Pro Micro footprint (2 × 12, 0.6" rows, 2.54 mm pitch). Fits Adafruit KB2040 (RP2040), SparkFun Pro Micro RP2040,
+ *  nice!nano v2 (nRF52840). Local: USB-C at +y; left column = pins 1-12, right column = 13-24, both top -> bottom. */
+export const PM_LEFT = ['TX', 'RX', 'GND', 'GND', '2', '3', '4', '5', '6', '7', '8', '9'];
+export const PM_RIGHT = ['RAW', 'GND', 'RST', 'VCC', '21', '20', '19', '18', '15', '14', '16', '10'];
+const pmY = (i: number) => +(13.97 - i * 2.54).toFixed(3);
+export const proMicro: Footprint = {
+  id: 'PROMICRO', name: 'Pro Micro RP2040 (KB2040)', desc: 'USB-C controller module, socketed · 18×33 mm', prefix: 'U',
+  pads: [...PM_LEFT.map((_, i) => ({ x: -7.62, y: pmY(i), w: 1.7, h: 1.7, shape: (i ? 'circle' : 'rect') as PadShape, drill: 1.0, num: String(i + 1) })),
+    ...PM_RIGHT.map((_, i) => ({ x: 7.62, y: pmY(i), w: 1.7, h: 1.7, shape: 'circle' as const, drill: 1.0, num: String(i + 13) }))],
+  silk: { lines: [[-9, 16.5, 9, 16.5], [9, 16.5, 9, -16.5], [9, -16.5, -9, -16.5], [-9, -16.5, -9, 16.5], [-4.5, 16.5, -4.5, 13.5], [4.5, 16.5, 4.5, 13.5], [-4.5, 13.5, 4.5, 13.5]], dots: [[-9.8, 14.6, 0.5]] },
+  body: [
+    { kind: 'box', x: -7.62, y: 0, z: 0, w: 2.5, d: 30.5, h: 5, color: '#141518' }, { kind: 'box', x: 7.62, y: 0, z: 0, w: 2.5, d: 30.5, h: 5, color: '#141518' },
+    { kind: 'box', x: 0, y: 0, z: 5, w: 18, d: 33, h: 1.2, color: '#0d1b3d' },
+    { kind: 'box', x: 0, y: 2, z: 6.2, w: 7, d: 7, h: 0.9, color: BLACK, label: 'RP2040' },
+    { kind: 'box', x: 0, y: 15.2, z: 6.2, w: 9, d: 7.4, h: 3.2, color: '#c9ced6', metal: true },
+  ],
+  size: [19, 34],
+};
+export const mountHole = (m: 'M2' | 'M2.5'): Footprint => {
+  const d = m === 'M2' ? 2.2 : 2.7, r = d / 2 + 0.9, oct = Array.from({ length: 8 }, (_, i) => [Math.cos(i * Math.PI / 4) * r, Math.sin(i * Math.PI / 4) * r]);
+  return { id: m === 'M2' ? 'MH_M2' : 'MH_M25', name: `Mounting hole ${m}`, desc: `${d} mm NPTH (${m} screw/standoff)`, prefix: 'H',
+    pads: [npth(0, 0, d)], silk: { lines: oct.map((p, i) => [p[0], p[1], oct[(i + 1) % 8][0], oct[(i + 1) % 8][1]] as [number, number, number, number]), dots: [] },
+    body: [{ kind: 'cyl', x: 0, y: 0, z: -0.01, r: d / 2 + 0.6, h: 0.02, color: '#c9a24a', metal: true }], size: [r * 2 + 0.4, r * 2 + 0.4] };
+};
+export const HDR5 = header(5), HDR7 = header(7);
+for (const f of [dSod123B, proMicro, mountHole('M2'), mountHole('M2.5'), HDR5, HDR7]) { FOOTPRINTS.push(f); FP[f.id] = f; }

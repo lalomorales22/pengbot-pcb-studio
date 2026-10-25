@@ -17,6 +17,7 @@ export interface TileOpts {
   occupied?: MmRect[];      // tiles already placed (second pass fills gaps around these)
   maxOverlap?: number;      // allowed overlap with occupied, fraction of tile area
   pxMm?: number;            // silk pixel size; >= 0.15 keeps every line JLC-printable
+  inside?: (box: MmRect) => boolean; // e.g. custom board outline test
 }
 export interface TileResult { art: Art; placed: (MmRect & { flip: boolean })[] }
 
@@ -75,6 +76,7 @@ export function tilePenguinArt(o: TileOpts): TileResult {
     if (box.x1 < margin || box.y1 < margin || box.x2 > board.w - margin || box.y2 > board.h - margin) continue;
     const ink = { x1: x1 + tw * 0.06, y1: y1 + th * 0.04, x2: box.x2 - tw * 0.06, y2: box.y2 - th * 0.04 };
     if (avoid.some(a => hit(ink, a))) continue;
+    if (o.inside && !o.inside({ x1: box.x1 - margin, y1: box.y1 - margin, x2: box.x2 + margin, y2: box.y2 + margin })) continue;
     if (occ.some(q => overlapArea(box, q) > maxOv * tw * th)) continue;
     const flip = (o.alternate ? (r + c) % 2 === 1 : false) !== !!o.mirror;
     const g = penguinRects(scaleMm, flip, px), X = Math.round(x1 * NM), Y = Math.round(y1 * NM);

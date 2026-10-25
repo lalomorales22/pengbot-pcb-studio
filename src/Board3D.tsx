@@ -72,17 +72,19 @@ function markingTexture(text: string, w: number, d: number) {
   const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
 }
 
-const ChipBody = memo(function ChipBody({ fp, ghost }: { fp: Footprint; ghost?: boolean }) {
+const ChipBody = memo(function ChipBody({ fp, ghost, capColor }: { fp: Footprint; ghost?: boolean; capColor?: string }) {
   const labelTex = useMemo(() => {
     const b = fp.body.find(b => b.kind === 'box' && b.label) as Extract<Footprint['body'][number], { kind: 'box' }> | undefined;
     return !b ? null : b.label === 'PengBot' ? labelTexture('PengBot') : markingTexture(b.label!, b.w, b.d);
   }, [fp]);
   return <>{fp.body.map((b, i) => {
-    const mat = <meshStandardMaterial color={b.color} metalness={b.metal ? 0.75 : 0.05} roughness={b.metal ? 0.3 : 0.55}
+    const color = b.kind === 'box' && b.cap && capColor ? capColor : b.color;
+    const zc = (z: number, h: number) => (b.under ? -T - z - h / 2 : z + h / 2);
+    const mat = <meshStandardMaterial color={color} metalness={b.metal ? 0.75 : 0.05} roughness={b.metal ? 0.3 : 0.55}
       transparent={ghost} opacity={ghost ? 0.45 : 1} depthWrite={!ghost} />;
-    if (b.kind === 'cyl') return <mesh key={i} position={[b.x, b.z + b.h / 2, -b.y]} castShadow><cylinderGeometry args={[b.r, b.r, b.h, 24]} />{mat}</mesh>;
+    if (b.kind === 'cyl') return <mesh key={i} position={[b.x, zc(b.z, b.h), -b.y]} castShadow><cylinderGeometry args={[b.r, b.r, b.h, 24]} />{mat}</mesh>;
     return <group key={i}>
-      <mesh position={[b.x, b.z + b.h / 2, -b.y]} castShadow><boxGeometry args={[b.w, b.h, b.d]} />{mat}</mesh>
+      <mesh position={[b.x, zc(b.z, b.h), -b.y]} castShadow><boxGeometry args={[b.w, b.h, b.d]} />{mat}</mesh>
       {b.label && labelTex && !ghost && <mesh position={[b.x, b.z + b.h + 0.003, -b.y]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[b.w * 0.94, b.d * 0.94]} /><meshStandardMaterial map={labelTex} metalness={0.3} roughness={0.45} /></mesh>}
     </group>;
@@ -97,7 +99,7 @@ function Courtyard({ fp, color = '#7fe3ff' }: { fp: Footprint; color?: string })
 function ChipMesh({ c, pos, selected, onDown, onClick }: { c: Chip; pos: V3; selected: boolean; onDown(e: ThreeEvent<PointerEvent>): void; onClick(e: ThreeEvent<MouseEvent>): void }) {
   const fp = FP[c.fp]; if (!fp) return null;
   return <group position={pos} rotation={[0, (c.rot * Math.PI) / 180, 0]} onPointerDown={onDown} onClick={onClick}>
-    <ChipBody fp={fp} />{selected && <Courtyard fp={fp} />}
+    <ChipBody fp={fp} capColor={c.color} />{selected && <Courtyard fp={fp} />}
   </group>;
 }
 
@@ -127,6 +129,18 @@ function Scene(p: BoardProps) {
     topTex.needsUpdate = true; botTex.needsUpdate = true;
   }, [p.design, p.look, p.vis, p.grid, p.showGrid, p.preview, p.sel, topTex, botTex]); // eslint-disable-line
 
+  const outline = p.design.outline;
+  const shaped = useMemo(() => {
+    if (!outline) return null;
+    const mk = (flip: boolean) => {
+      const g = new THREE.ShapeGeometry(new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x - BW / 2, flip ? BH / 2 - y : y - BH / 2))));
+      const pos = g.attributes.position, uv = g.attributes.uv;
+      for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) + BW / 2) / BW, (pos.getY(i) + BH / 2) / BH);
+      uv.needsUpdate = true; return g;
+    };
+    const core = new THREE.ExtrudeGeometry(new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x - BW / 2, y - BH / 2))), { depth: T * 0.995, bevelEnabled: false, curveSegments: 4 });
+    return { top: mk(false), bot: mk(true), core };
+  }, [outline, BW, BH]);
   const [hover, setHover] = useState<Pt | null>(null);
   const [stroke, setStroke] = useState<Pt[]>([]);
   const drawing = useRef(false), moving = useRef<{ id: string; dx: number; dy: number } | null>(null);
@@ -208,7 +222,7 @@ function Scene(p: BoardProps) {
 
   return <>
     <CameraRig view={p.view} size={MAXD} />
-    <OrbitControls makeDefault mouseButtons={mouseButtons as any} enableDamping dampingFactor={0.12} minDistance={8} maxDistance={220} />
+    <OrbitControls makeDefault mouseButtons={mouseButtons as any} enableDamping dampingFactor={0.12} minDistance={8} maxDistance={Math.max(220, MAXD * 3)} />
     <ambientLight intensity={0.35} />
     <hemisphereLight args={['#d8efff', '#0b1626', 0.7]} />
     <directionalLight position={[30, 60, 25]} intensity={1.7} castShadow />
@@ -216,14 +230,15 @@ function Scene(p: BoardProps) {
     <directionalLight position={[-30, 20, -30]} intensity={0.35} color="#bfe6ff" />
 
     {/* board: FR4 core + painted top/bottom skins */}
-    <mesh><boxGeometry args={[BW, T, BH]} /><meshStandardMaterial color={p.look.mask} roughness={0.6} /></mesh>
-    <mesh scale={[1.0004, 0.55, 1.0004]}><boxGeometry args={[BW, T, BH]} /><meshStandardMaterial color={p.look.fr4} roughness={0.8} /></mesh>
-    <mesh position={[0, H + 0.002, 0]} rotation={[-Math.PI / 2, 0, 0]} onPointerDown={onDown} onPointerMove={onMove} onClick={onClick}
+    {!shaped && <mesh><boxGeometry args={[BW, T, BH]} /><meshStandardMaterial color={p.look.mask} roughness={0.6} /></mesh>}
+    {!shaped && <mesh scale={[1.0004, 0.55, 1.0004]}><boxGeometry args={[BW, T, BH]} /><meshStandardMaterial color={p.look.fr4} roughness={0.8} /></mesh>}
+    {shaped && <mesh geometry={shaped.core} position={[0, -H, 0]} rotation={[-Math.PI / 2, 0, 0]}><meshStandardMaterial color={p.look.fr4} roughness={0.8} /></mesh>}
+    <mesh position={[0, H + 0.002, 0]} rotation={[-Math.PI / 2, 0, 0]} geometry={shaped?.top} onPointerDown={onDown} onPointerMove={onMove} onClick={onClick}
       onPointerUp={() => { if (drawing.current && p.tool === 'brush') finish(); }} onPointerOut={() => { setHover(null); p.onCursor(null); }} onDoubleClick={() => p.tool === 'poly' && finish()}>
-      <planeGeometry args={[BW, BH]} /><meshStandardMaterial map={topTex} roughness={0.42} metalness={0.08} />
+      {!shaped && <planeGeometry args={[BW, BH]} />}<meshStandardMaterial map={topTex} roughness={0.42} metalness={0.08} />
     </mesh>
-    <mesh position={[0, -H - 0.002, 0]} rotation={[Math.PI / 2, 0, 0]}>
-      <planeGeometry args={[BW, BH]} /><meshStandardMaterial map={botTex} roughness={0.42} metalness={0.08} />
+    <mesh position={[0, -H - 0.002, 0]} rotation={[Math.PI / 2, 0, 0]} geometry={shaped?.bot}>
+      {!shaped && <planeGeometry args={[BW, BH]} />}<meshStandardMaterial map={botTex} roughness={0.42} metalness={0.08} side={THREE.DoubleSide} />
     </mesh>
 
     {p.design.chips.map(c => <ChipMesh key={c.id} c={c} pos={W(c.x, c.y)} selected={p.sel?.kind === 'chip' && p.sel.id === c.id} onDown={chipDown(c)} onClick={chipClick(c)} />)}

@@ -1,5 +1,6 @@
 // Paints one board side (top/bottom) into a 2D canvas used as a Three.js texture. Units inside = mm.
-import { Art, Design, LayerId, NM, Rect, allPads, chipSilk, textRectsNm } from './core';
+import { Art, Design, LayerId, NM, Rect, allPads, chipSilk, onBot, onTop, textRectsNm } from './core';
+import { FP } from './footprints';
 
 export interface Look { mask: string; maskCopper: string; silk: string; fr4: string; gold: string; copper: string }
 export const MASKS: Record<string, Look> = {
@@ -24,8 +25,8 @@ export function paintSide(cv: HTMLCanvasElement, side: 'top' | 'bottom', d: Desi
   const circle = (x: number, y: number, dd: number) => { ctx.beginPath(); ctx.arc(x, y, dd / 2, 0, Math.PI * 2); ctx.fill(); };
   const polyline = (pts: [number, number][], w: number) => { ctx.lineWidth = w; ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); if (pts.length === 1) circle(pts[0][0], pts[0][1], w); else ctx.stroke(); };
   const pads = allPads(d);
-  const sidePads = top ? pads : pads.filter(p => p.drill);
-  const holes = [...pads.filter(p => p.drill), ...d.vias.map(v => ({ x: v.x, y: v.y, w: v.d, h: v.d, shape: 'circle' as const, net: v.net }))];
+  const sidePads = top ? pads.filter(onTop) : pads.filter(onBot), npth = pads.filter(p => p.npth);
+  const holes = [...pads.filter(p => p.drill && !p.npth), ...d.vias.map(v => ({ x: v.x, y: v.y, w: v.d, h: v.d, shape: 'circle' as const, net: v.net }))];
   const padPath = (list: typeof sidePads, exp = 0) => {
     for (const p of list) {
       if (p.shape === 'circle') { ctx.moveTo(p.x + p.w / 2 + exp, p.y); ctx.arc(p.x, p.y, p.w / 2 + exp, 0, Math.PI * 2); }
@@ -39,6 +40,7 @@ export function paintSide(cv: HTMLCanvasElement, side: 'top' | 'bottom', d: Desi
       d.traces.filter(t => t.layer === 'TopCopper').forEach(t => polyline(t.pts, t.width));
     } else {
       rects(d.art.filter(a => a.layer === 'BottomCopper').flatMap(a => a.rects));
+      d.traces.filter(t => t.layer === 'BottomCopper').forEach(t => polyline(t.pts, t.width));
       for (const pr of d.pours) { // GND pour with clearances + thermal spokes
         const c = pr.clearance; ctx.fillRect(pr.margin, pr.margin, BW - 2 * pr.margin, BH - 2 * pr.margin);
         ctx.fillStyle = maskOn ? L.mask : L.fr4; ctx.beginPath(); padPath(holes, c); ctx.fill();
@@ -56,10 +58,17 @@ export function paintSide(cv: HTMLCanvasElement, side: 'top' | 'bottom', d: Desi
   if (o.vis[top ? 'TopSilk' : 'BottomSilk']) {
     ctx.fillStyle = L.silk; ctx.strokeStyle = L.silk; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     rects(d.art.filter(a => a.layer === (top ? 'TopSilk' : 'BottomSilk')).flatMap(a => a.rects));
+    (d.silkPolys ?? []).filter(p => p.layer === (top ? 'TopSilk' : 'BottomSilk')).forEach(p => polyline(p.pts, p.w));
+    for (const c of d.chips) {
+      if ((FP[c.fp]?.silkSide ?? 'T') !== (top ? 'T' : 'B')) continue;
+      const s = chipSilk(c); ctx.lineWidth = 0.15;
+      ctx.beginPath(); s.lines.forEach(([a, b]) => { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }); ctx.stroke();
+      s.dots.forEach(([x, y, dd]) => circle(x, y, dd));
+    }
     if (top) {
       rects(textRectsNm(d));
       d.traces.filter(t => t.layer === 'TopSilk').forEach(t => polyline(t.pts, t.width));
-      for (const c of d.chips) {
+      for (const c of [] as typeof d.chips) {
         const s = chipSilk(c); ctx.lineWidth = 0.15;
         ctx.beginPath(); s.lines.forEach(([a, b]) => { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }); ctx.stroke();
         s.dots.forEach(([x, y, dd]) => circle(x, y, dd));
@@ -81,7 +90,8 @@ export function paintSide(cv: HTMLCanvasElement, side: 'top' | 'bottom', d: Desi
   }
   // holes
   ctx.fillStyle = '#07090d';
-  pads.filter(p => p.drill).forEach(p => circle(p.x, p.y, p.drill!));
+  pads.filter(p => p.drill || p.npth).forEach(p => circle(p.x, p.y, p.drill ?? p.w));
+  void npth;
   d.vias.forEach(v => circle(v.x, v.y, v.drill));
 
   if (top && o.showGrid) {
